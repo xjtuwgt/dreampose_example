@@ -18,9 +18,6 @@ import torch.nn as nn
 import numpy as np
 import cv2
 
-from accelerate import Accelerator
-from accelerate.logging import get_logger
-from accelerate.utils import set_seed
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
 from diffusers.optimization import get_scheduler
 from huggingface_hub import HfFolder, Repository, whoami
@@ -38,6 +35,7 @@ from datasets.dreampose_dataset import DreamPoseDataset
 from pipelines.dual_encoder_pipeline import StableDiffusionImg2ImgPipeline
 from models.unet_dual_encoder import get_unet, Embedding_Adapter
 
+
 def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
     if token is None:
         token = HfFolder.get_token()
@@ -47,44 +45,9 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
     else:
         return f"{organization}/{model_id}"
 
+
 def main(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
-
-    accelerator = Accelerator(
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        mixed_precision=args.mixed_precision,
-        log_with="tensorboard",
-        logging_dir=logging_dir,
-    )
-
-    # Currently, it's not possible to do gradient accumulation when training two models with accelerate.accumulate
-    # This will be enabled soon in accelerate. For now, we don't allow gradient accumulation when training two models.
-    # TODO (patil-suraj): Remove this check when gradient accumulation with two models is enabled in accelerate.
-    if args.train_text_encoder and args.gradient_accumulation_steps > 1 and accelerator.num_processes > 1:
-        raise ValueError(
-            "Gradient accumulation is not supported when training the text encoder in distributed training. "
-            "Please set gradient_accumulation_steps to 1. This feature will be supported in the future."
-        )
-
-    if args.seed is not None:
-        set_seed(args.seed)
-
-    # Handle the repository creation
-    if accelerator.is_main_process:
-        if args.push_to_hub:
-            if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
-            else:
-                repo_name = args.hub_model_id
-            repo = Repository(args.output_dir, clone_from=repo_name)
-
-            with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
-                if "step_*" not in gitignore:
-                    gitignore.write("step_*\n")
-                if "epoch_*" not in gitignore:
-                    gitignore.write("epoch_*\n")
-        elif args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
 
     # Load CLIP Image Encoder
     clip_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").cuda()
@@ -93,77 +56,21 @@ def main(args):
 
     # Load models and create wrapper for stable diffusion
     vae = AutoencoderKL.from_pretrained(
-                "CompVis/stable-diffusion-v1-4",
-                subfolder="vae",
-                revision="ebb811dd71cdc38a204ecbdd6ac5d580f529fd8c"
-            )
+        "CompVis/stable-diffusion-v1-4",
+        subfolder="vae",
+        revision="ebb811dd71cdc38a204ecbdd6ac5d580f529fd8c"
+    )
 
     # Load pretrained UNet layers
     unet = get_unet(args.pretrained_model_name_or_path, args.revision, resolution=args.resolution)
 
-    if args.custom_chkpt is not None:
-        print("Loading ", args.custom_chkpt)
-        unet_state_dict = torch.load(args.custom_chkpt)
-        new_state_dict = OrderedDict()
-        for k, v in unet_state_dict.items():
-            name = k[7:] if k[:7] == 'module' else k 
-            new_state_dict[name] = v
-        unet.load_state_dict(new_state_dict)
-        unet = unet.cuda()
-
     # Embedding adapter
     adapter = Embedding_Adapter(input_nc=1280, output_nc=1280)
 
-    if args.custom_chkpt is not None:
-        adapter_chkpt = args.custom_chkpt.replace('unet_epoch', 'adapter')
-        print("Loading ", adapter_chkpt)
-        adapter_state_dict = torch.load(adapter_chkpt)
-        new_state_dict = OrderedDict()
-        for k, v in adapter_state_dict.items():
-            name = k[7:] if k[:7] == 'module' else k 
-            new_state_dict[name] = v
-        adapter.load_state_dict(new_state_dict)
-        adapter = adapter.cuda()
 
-    #adapter.requires_grad_(True)
+    # adapter.requires_grad_(True)
 
     vae.requires_grad_(False)
-
-    if args.gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
-        adapter.enable_gradient_checkpointing()
-
-    if args.scale_lr:
-        args.learning_rate = (
-            args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
-        )
-
-    # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
-    if args.use_8bit_adam:
-        try:
-            import bitsandbytes as bnb
-        except ImportError:
-            raise ImportError(
-                "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
-            )
-
-        optimizer_class = bnb.optim.AdamW8bit
-    else:
-        optimizer_class = torch.optim.AdamW
-
-    params_to_optimize = (
-        itertools.chain(unet.parameters(), adapter.parameters(),)
-    )
-
-    optimizer = optimizer_class(
-        params_to_optimize,
-        lr=args.learning_rate,
-        betas=(args.adam_beta1, args.adam_beta2),
-        weight_decay=args.adam_weight_decay,
-        eps=args.adam_epsilon,
-    )
-
-    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
 
     # Load the tokenizer
     if args.tokenizer_name:
@@ -193,6 +100,7 @@ def main(args):
 
         # Concat class and instance examples for prior preservation.
         # We do this to avoid doing two forward passes.
+        input_ids = []
         if args.with_prior_preservation:
             input_ids += [example["class_prompt_ids"] for example in examples]
             frame_i += [example["class_frame_i"] for example in examples]
@@ -205,11 +113,11 @@ def main(args):
 
         # Dropout
         p = random.random()
-        if p <= args.dropout_rate / 3: # dropout pose
+        if p <= args.dropout_rate / 3:  # dropout pose
             poses = torch.zeros(poses.shape)
-        elif p <= 2*args.dropout_rate / 3: # dropout image
+        elif p <= 2 * args.dropout_rate / 3:  # dropout image
             frame_i = torch.zeros(frame_i.shape)
-        elif p <= args.dropout_rate: # dropout image and pose
+        elif p <= args.dropout_rate:  # dropout image and pose
             poses = torch.zeros(poses.shape)
             frame_i = torch.zeros(frame_i.shape)
 
@@ -305,7 +213,7 @@ def main(args):
         return target_images
 
     def visualize_dp(im, dp):
-        im = im.transpose((1,2,0))
+        im = im.transpose((1, 2, 0))
         hsv = np.zeros(im.shape, dtype=np.uint8)
         hsv[..., 1] = 255
 
@@ -315,7 +223,7 @@ def main(args):
         hsv[..., 2] = cv2.normalize(mag, None, 0, 255, cv2.NORM_MINMAX)
         bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
 
-        bgr = bgr.transpose((2,0,1))
+        bgr = bgr.transpose((2, 0, 1))
         return bgr
 
     latest_chkpt_step = 0
@@ -325,7 +233,7 @@ def main(args):
         first_batch = True
         for step, batch in enumerate(train_dataloader):
             if first_batch and latest_chkpt_step is not None:
-                #os.system(f"python test_img2img.py --step {latest_chkpt_step} --strength 0.8")
+                # os.system(f"python test_img2img.py --step {latest_chkpt_step} --strength 0.8")
                 first_batch = False
             with accelerator.accumulate(unet):
                 # Convert images to latent space
@@ -346,12 +254,12 @@ def main(args):
 
                 # Concatenate pose with noise
                 _, _, h, w = noisy_latents.shape
-                noisy_latents = torch.cat((noisy_latents, F.interpolate(batch['poses'], (h,w))), 1)
+                noisy_latents = torch.cat((noisy_latents, F.interpolate(batch['poses'], (h, w))), 1)
 
                 # Get CLIP embeddings
                 inputs = clip_processor(images=list(batch['frame_i'].to(latents.device)), return_tensors="pt")
                 inputs = {k: v.to(latents.device) for k, v in inputs.items()}
-                clip_hidden_states =  clip_encoder(**inputs).last_hidden_state.to(latents.device)
+                clip_hidden_states = clip_encoder(**inputs).last_hidden_state.to(latents.device)
 
                 # Get VAE embeddings
                 image = batch['frame_i'].to(device=latents.device, dtype=weight_dtype)
@@ -412,7 +320,7 @@ def main(args):
             if accelerator.is_main_process and global_step % 500 == 0:
                 pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
                     args.pretrained_model_name_or_path,
-                    #adapter=accelerator.unwrap_model(adapter),
+                    # adapter=accelerator.unwrap_model(adapter),
                     unet=accelerator.unwrap_model(unet),
                     tokenizer=tokenizer,
                     image_encoder=accelerator.unwrap_model(clip_encoder),
@@ -420,18 +328,18 @@ def main(args):
                     revision=args.revision,
                 )
                 pipeline.save_pretrained(os.path.join(args.output_dir, f'checkpoint-{epoch}'))
-                model_path = args.output_dir+f'/unet_epoch_{epoch}.pth'
+                model_path = args.output_dir + f'/unet_epoch_{epoch}.pth'
                 torch.save(unet.state_dict(), model_path)
-                adapter_path = args.output_dir+f'/adapter_{epoch}.pth'
+                adapter_path = args.output_dir + f'/adapter_{epoch}.pth'
                 torch.save(adapter.state_dict(), adapter_path)
 
         accelerator.wait_for_everyone()
-        
+
     # save model
     if accelerator.is_main_process and global_step % 500 == 0:
         pipeline = StableDiffusionImg2ImgPipeline.from_pretrained(
             args.pretrained_model_name_or_path,
-            #adapter=accelerator.unwrap_model(adapter),
+            # adapter=accelerator.unwrap_model(adapter),
             unet=accelerator.unwrap_model(unet),
             tokenizer=tokenizer,
             image_encoder=accelerator.unwrap_model(clip_encoder),
@@ -439,9 +347,9 @@ def main(args):
             revision=args.revision,
         )
         pipeline.save_pretrained(os.path.join(args.output_dir, f'checkpoint-{epoch}'))
-        model_path = args.output_dir+f'/unet_epoch_{epoch}.pth'
+        model_path = args.output_dir + f'/unet_epoch_{epoch}.pth'
         torch.save(unet.state_dict(), model_path)
-        adapter_path = args.output_dir+f'/adapter_{epoch}.pth'
+        adapter_path = args.output_dir + f'/adapter_{epoch}.pth'
         torch.save(adapter.state_dict(), adapter_path)
 
     accelerator.end_training()

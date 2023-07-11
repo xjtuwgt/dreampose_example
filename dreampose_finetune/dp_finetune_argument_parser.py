@@ -1,23 +1,59 @@
-import os, argparse
+# coding=utf-8
+# /usr/bin/env python3
+import os
+import argparse
+import torch
+import logging
+import random
+import numpy as np
+from os.path import join
+from io_setting import OUTPUT_FOLDER, DATASET_FOLDER, PRETRAINED_MODEL_FOLDER
 
-def parse_args(input_args=None):
-    parser = argparse.ArgumentParser(description="Simple example of a training script.")
+logger = logging.getLogger(__name__)
 
-    parser.add_argument("--pretrained_model_name_or_path", type=str, default=None, required=True, help="Path to pretrained model or model identifier from huggingface.co/models.",)
-    parser.add_argument("--custom_chkpt", type=str, default=None, required=False, help="Path to custom pretrained model.",)
+
+def boolean_string(s):
+    if s.lower() not in {'false', 'true'}:
+        raise ValueError('Not a valid boolean string')
+    return s.lower() == 'true'
+
+
+def set_seed(args):
+    random_seed = args.seed
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed)
+    if args.n_gpu > 0:
+        torch.cuda.manual_seed_all(random_seed)
+
+
+def default_train_parser():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--pretrained_model_name_or_path", type=str, default=None, required=True,
+                        help="Path to pretrained model or model identifier from huggingface.co/models.", )
+    parser.add_argument("--custom_chkpt", type=str, default=None, required=False,
+                        help="Path to custom pretrained model.", )
     parser.add_argument('--tb_dir', default="tb", help="Directory for tensorboard files")
     parser.add_argument('--cfg', default="cfg/train.cfg", help="Path to config file")
     parser.add_argument('--chkpt', default=None, help="Path to checkpoint -state file")
     parser.add_argument("--run_name", type=str, default='dreampose-tb')
     parser.add_argument('--epoch', default=0, type=int, help="Which epoch to start training at")
-    parser.add_argument("--revision", type=str, default=None, required=False, help="Revision of pretrained model identifier from huggingface.co/models.",)
-    parser.add_argument("--tokenizer_name", type=str, default=None, help="Pretrained tokenizer name or path if not the same as model_name",)
-    parser.add_argument("--instance_data_dir", type=str, default=None, required=True, help="A folder containing the training data of instance images.",)
-    parser.add_argument("--class_data_dir", type=str, default=None, required=False, help="A folder containing the training data of class images.",)
-    parser.add_argument("--class_prompt", type=str, default=None, help="The prompt to specify images in the same class as provided instance images.",)
+    parser.add_argument("--revision", type=str, default=None, required=False,
+                        help="Revision of pretrained model identifier from huggingface.co/models.", )
+    parser.add_argument("--tokenizer_name", type=str, default=None,
+                        help="Pretrained tokenizer name or path if not the same as model_name", )
+    parser.add_argument("--instance_data_dir", type=str, default=None, required=True,
+                        help="A folder containing the training data of instance images.", )
+    parser.add_argument("--class_data_dir", type=str, default=None, required=False,
+                        help="A folder containing the training data of class images.", )
+    parser.add_argument("--class_prompt", type=str, default=None,
+                        help="The prompt to specify images in the same class as provided instance images.", )
     parser.add_argument('--num_frames', default=8, type=int, help="Which epoch to start training at")
-    parser.add_argument('--dropout_rate', default=0.2, type=float, help="Percent of training samples to remove conditioning info.")
-    parser.add_argument("--train_decoder", action='store_true', help="Whether or not to train the VAE decoder with an additional L1-Loss.")
+    parser.add_argument('--dropout_rate', default=0.2, type=float,
+                        help="Percent of training samples to remove conditioning info.")
+    parser.add_argument("--train_decoder", action='store_true',
+                        help="Whether or not to train the VAE decoder with an additional L1-Loss.")
     parser.add_argument(
         "--with_prior_preservation",
         default=False,
@@ -148,10 +184,7 @@ def parse_args(input_args=None):
     )
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
 
-    if input_args is not None:
-        args = parser.parse_args(input_args)
-    else:
-        args = parser.parse_args()
+    args = parser.parse_args()
 
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
@@ -167,5 +200,4 @@ def parse_args(input_args=None):
             logger.warning("You need not use --class_data_dir without --with_prior_preservation.")
         if args.class_prompt is not None:
             logger.warning("You need not use --class_prompt without --with_prior_preservation.")
-
-    return args
+    return parser

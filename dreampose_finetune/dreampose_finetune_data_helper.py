@@ -11,6 +11,8 @@ import os, cv2, glob
     - Passes 5 consecutive input poses per sample 
     - Ensures at least one pair of consecutive frames per batch
 '''
+
+
 class DreamPoseDataset(Dataset):
     """
     A dataset to prepare the instance and class images with the prompts for fine-tuning the model.
@@ -18,15 +20,15 @@ class DreamPoseDataset(Dataset):
     """
 
     def __init__(
-        self,
-        instance_data_root,
-        class_data_root=None,
-        class_prompt=None,
-        size=512,
-        center_crop=False,
-        train=True,
-        p_jitter=0.9,
-        n_poses=5
+            self,
+            instance_data_root,
+            class_data_root=None,
+            class_prompt=None,
+            size=512,
+            center_crop=False,
+            train=True,
+            p_jitter=0.9,
+            n_poses=5
     ):
         self.size = (640, 512)
         self.center_crop = center_crop
@@ -39,15 +41,16 @@ class DreamPoseDataset(Dataset):
 
         # Load UBC Fashion Dataset
         self.instance_images_path = glob.glob('../UBC_Fashion_Dataset/train-frames/*/*png')
-        self.instance_images_path = [p for p in self.instance_images_path if os.path.exists(p.replace('.png', '_densepose.npy'))]
+        self.instance_images_path = [p for p in self.instance_images_path if
+                                     os.path.exists(p.replace('.png', '_densepose.npy'))]
         len1 = len(self.instance_images_path)
-        
+
         # Load Deep Fashion Dataset
         self.instance_images_path.extend([path for path in glob.glob('../Deep_Fashion_Dataset/img_highres/*/*/*/*.jpg') \
-                                            if os.path.exists(path.replace('.jpg', '_densepose.npy'))])
+                                          if os.path.exists(path.replace('.jpg', '_densepose.npy'))])
 
         len2 = len(self.instance_images_path)
-        print(f"Train Dataset: {len1} UBC Fashion images, {len2-len1} Deep Fashion images.")
+        print(f"Train Dataset: {len1} UBC Fashion images, {len2 - len1} Deep Fashion images.")
 
         self.num_instance_images = len(self.instance_images_path)
         self._length = self.num_instance_images
@@ -65,16 +68,16 @@ class DreamPoseDataset(Dataset):
         self.image_transforms = transforms.Compose(
             [
                 transforms.Resize(self.size, interpolation=transforms.InterpolationMode.BILINEAR),
-                #transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.3, hue=0.3),
-                #transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
+                # transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.3, hue=0.3),
+                # transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
                 transforms.ToTensor(),
-                #transforms.Normalize([0.5], [0.5]),
+                # transforms.Normalize([0.5], [0.5]),
             ]
         )
 
         self.tensor_transforms = transforms.Compose(
             [
-                #transforms.Normalize([0.5], [0.5]),
+                # transforms.Normalize([0.5], [0.5]),
             ]
         )
 
@@ -90,10 +93,10 @@ class DreamPoseDataset(Dataset):
         y_vals = np.where(pose != 0)[1]
         for (x, y) in list(zip(x_vals, y_vals)):
             # find new coordinates
-            x2, y2 = int(x * h2 / h1), int(y * w2 / w1) 
+            x2, y2 = int(x * h2 / h1), int(y * w2 / w1)
             resized_pose[x2, y2] = pose[x, y]
         return resized_pose
-        
+
     # return two consecutive frames per call
     def __getitem__(self, index):
         example = {}
@@ -101,7 +104,7 @@ class DreamPoseDataset(Dataset):
         '''
 
         Prepare frame #1
-        
+
         '''
         # load frame i
         frame_path = self.instance_images_path[index % self.num_instance_images]
@@ -112,14 +115,15 @@ class DreamPoseDataset(Dataset):
 
         # Get additional frames in this folder
         sample_folder = frame_path.replace(os.path.basename(frame_path), '')
-        samples = [path for path in glob.glob(sample_folder+'/*') if 'npy' not in path]
-        samples = [path for path in samples if os.path.exists(path.replace('.jpg', '_densepose.npy').replace('.png', '_densepose.npy'))]
+        samples = [path for path in glob.glob(sample_folder + '/*') if 'npy' not in path]
+        samples = [path for path in samples if
+                   os.path.exists(path.replace('.jpg', '_densepose.npy').replace('.png', '_densepose.npy'))]
 
         if 'Deep_Fashion' in frame_path:
             idx = os.path.basename(frame_path).split('_')[0]
             samples = [s for s in samples if os.path.basename(s).split('_')[0] == idx]
-            #print("Frame Path = ", frame_path)
-            #print("Sampels = ", samples)
+            # print("Frame Path = ", frame_path)
+            # print("Sampels = ", samples)
 
         frame_j_path = samples[np.random.choice(range(len(samples)))]
         pose_j_path = frame_j_path.replace('.jpg', '_densepose.npy')
@@ -133,11 +137,12 @@ class DreamPoseDataset(Dataset):
         # Load 5 poses surrounding j
         _, h, w = example["frame_i"].shape
         poses = []
-        idx1= int(self.n_poses // 2)
+        idx1 = int(self.n_poses // 2)
         idx2 = self.n_poses - idx1
         for pose_number in range(5):
             dp_path = frame_j_path.replace('.jpg', '_densepose.npy').replace('.png', '_densepose.npy')
-            dp_i = F.interpolate(torch.from_numpy(np.load(dp_path, allow_pickle=True).astype('float32')).unsqueeze(0), (h, w), mode='bilinear').squeeze(0)
+            dp_i = F.interpolate(torch.from_numpy(np.load(dp_path, allow_pickle=True).astype('float32')).unsqueeze(0),
+                                 (h, w), mode='bilinear').squeeze(0)
             poses.append(self.tensor_transforms(dp_i))
 
         example["pose_j"] = torch.cat(poses, 0)
@@ -145,7 +150,7 @@ class DreamPoseDataset(Dataset):
         '''
 
         Prepare frame #2
-        
+
         '''
         new_frame_path = samples[np.random.choice(range(len(samples)))]
         frame_path = new_frame_path
@@ -169,11 +174,12 @@ class DreamPoseDataset(Dataset):
         poses = []
         for pose_number in range(5):
             dp_path = frame_j_path.replace('.jpg', '_densepose.npy').replace('.png', '_densepose.npy')
-            dp_i = F.interpolate(torch.from_numpy(np.load(dp_path, allow_pickle=True).astype('float32')).unsqueeze(0), (h, w), mode='bilinear').squeeze(0)
+            dp_i = F.interpolate(torch.from_numpy(np.load(dp_path, allow_pickle=True).astype('float32')).unsqueeze(0),
+                                 (h, w), mode='bilinear').squeeze(0)
             poses.append(self.tensor_transforms(dp_i))
 
         poses = torch.cat(poses, 0)
         example["pose_j"] = torch.stack((example["pose_j"], poses), 0)
 
-        #print(example["frame_i"].shape, example["frame_j"].shape, example["pose_j"].shape)
+        # print(example["frame_i"].shape, example["frame_j"].shape, example["pose_j"].shape)
         return example
