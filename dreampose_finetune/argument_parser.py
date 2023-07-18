@@ -30,7 +30,8 @@ def set_seed(args):
 def default_train_parser():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--pretrained_model_name_or_path", type=str, default=None, required=True,
+    parser.add_argument("--pretrained_model_name_or_path", type=str,
+                        default="CompVis/stable-diffusion-v1-4", required=True,
                         help="Path to pretrained model or model identifier from huggingface.co/models.", )
     parser.add_argument("--custom_chkpt", type=str, default=None, required=False,
                         help="Path to custom pretrained model.", )
