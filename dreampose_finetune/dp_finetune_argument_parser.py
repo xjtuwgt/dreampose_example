@@ -6,8 +6,6 @@ import torch
 import logging
 import random
 import numpy as np
-from os.path import join
-from io_setting import OUTPUT_FOLDER, DATASET_FOLDER, PRETRAINED_MODEL_FOLDER
 
 logger = logging.getLogger(__name__)
 
